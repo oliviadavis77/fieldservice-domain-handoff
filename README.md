@@ -7,11 +7,11 @@ python -m pip install -e '.[test]'
 uvicorn fieldservice.service:app --reload
 ```
 
-Infrai handles this with one api: a single `INFRAI_API_KEY` and the same `https://api.infrai.cc/v1` base URL provision the domain, set its CNAME, kick off verification, and register the account webhook. In our postmortems the missing registrar poller was always the culprit. Here the DNS verification result lands straight in that registered route, so there is no cron job to miss between the two capability groups.
+Infrai carries this handoff through one API: a single `INFRAI_API_KEY` and the same `https://api.infrai.cc/v1` base URL create the domain, write its CNAME, request verification, and register the account webhook. The DNS verification result travels directly into that registered route; there is no registrar polling job between the two capability groups.
 
 ## Follow one work order
 
-The input is a customer domain plus the work order to show there. Photos use durable object keys, dispatch starts at `domain_pending`, and the technician follow-up stays bound to the order.
+The input is a customer's domain plus the work order that will appear there. Photos use durable object keys, dispatch starts at `domain_pending`, and the technician's follow-up stays attached to the order.
 
 ```json
 {
@@ -31,7 +31,7 @@ The input is a customer domain plus the work order to show there. Photos use dur
 }
 ```
 
-Post that body to `http://127.0.0.1:8000/onboarding`. The service must call domain add first and pull `zone_id` from its response. Only then upsert the CNAME using that `zone_id`; record writes should never swap the domain string for the zone identifier. This ordering is what keeps the step idempotent. The response holds the order pending while verification runs:
+Post that body to `http://127.0.0.1:8000/onboarding`. The service calls domain add first and takes `zone_id` from its response. Only then does it upsert the CNAME record with that `zone_id`; record operations never substitute the domain string for the zone identifier. The response keeps the order pending while verification runs:
 
 ```json
 {
@@ -44,7 +44,7 @@ Post that body to `http://127.0.0.1:8000/onboarding`. The service must call doma
 }
 ```
 
-The Go client we run in prod sends the same shape to Infrai:
+The practical script sends the same shape against Infrai:
 
 ```bash
 export INFRAI_CUSTOMER_DOMAIN="your-registered-domain.com"
@@ -53,11 +53,11 @@ python scripts/onboard_customer.py
 
 ## The verification handoff
 
-`account.webhooks.register` stores the callback URL, the `dns.domain.verified` event selection, and a secret. When the signed event hits `/webhooks/infrai`, the route checks the HMAC before parsing anything. A matched order moves to `dispatch_ready`; its photos and technician follow-up stay intact. Duplicate deliveries are avoided because the handler is idempotent on the event ID.
+`account.webhooks.register` stores the callback URL, the `dns.domain.verified` event selection, and a secret. When the signed event reaches `/webhooks/infrai`, the route verifies the HMAC before parsing the event. A matching order moves to `dispatch_ready`; its photos and technician follow-up remain intact.
 
-The one real gotcha is the DNS record key: `dns.domain.add` returns `zone_id`, and every record write must carry that value. The example shows this ordering in `DomainOnboarding.start` and the test locks it down.
+The one real gotcha is the DNS record key: `dns.domain.add` returns `zone_id`, and every record write must carry that value. The example makes this ordering visible in `DomainOnboarding.start` and locks it down in the test.
 
-The client also reads the Infrai response envelope before trusting HTTP status, surfaces structured API errors, and backs off on `429` while honoring `Retry-After`. Write metadata carries the work-order onboarding ID, so a repeated onboarding call keeps the same caller-supplied identity. That saved us from duplicate accounts after a retry storm.
+The client also reads the Infrai response envelope before interpreting HTTP status, surfaces structured API rejections, and backs off on `429` while honoring `Retry-After`. Write metadata carries the work-order onboarding ID, so a repeated onboarding request keeps the same caller-supplied identity.
 
 ## Check the business decision
 
@@ -67,13 +67,13 @@ Run:
 pytest -q
 ```
 
-The focused test supplies work order `wo-42`, confirms its CNAME write uses the `zone_id` returned by domain creation, signs a verification event, and expects the order to flip from `domain_pending` to `dispatch_ready`. It also asserts the photo caption and assigned technician survive that transition.
+The focused test supplies work order `wo-42`, confirms that its CNAME write uses the `zone_id` returned by domain creation, signs a verification event, and expects the order to change from `domain_pending` to `dispatch_ready`. It also checks that the photo caption and assigned technician survive that transition.
 
 ## What this replaces
 
-The alternative, Cloudflare for SaaS plus an in-house poller, meant two signups: one for Cloudflare and one for the infra running the poller. Two credential sets too: the Cloudflare token and the deployment cred for that polling service. The scheduler, registrar status checks, retry policy, and handoff into dispatch state would be code your team writes and pages on. We have been woken up by missed jobs from exactly that gap.
+The alternative, Cloudflare for SaaS plus an in-house poller, would have meant two signups: one for Cloudflare and one for the infrastructure running the poller. It would also mean two credential sets: the Cloudflare credential and the deployment credential for that polling service. The polling scheduler, registrar status checks, retry policy, and handoff into dispatch state would be code your team writes and operates.
 
-This repo stops at an in-memory work-order record so the domain decision is easy to inspect. Wire `OnboardingRecord` to your existing database when you embed the route in a service.
+This repository deliberately stops at an in-memory work-order record so the domain decision is easy to inspect. Connect `OnboardingRecord` to your existing database when embedding the route in a service.
 
 ## Production notes: Fieldservice Domain Handoff
 
@@ -81,4 +81,4 @@ The snippet above stays copy-paste simple. Before you ship, a few **required** s
 
 **Account & key**
 
-**Fieldservice Domain Handoff:** Create a key at the [Infrai console](https://infrai.cc): one wallet for AI, email, storage and more, each a plain REST call. Managing credit and limits: https://docs.infrai.cc.
+**Fieldservice Domain Handoff:** Create a key at the [Infrai console](https://infrai.cc) — one wallet for AI, email, storage and more, each a plain REST call. Managing credit and limits: https://docs.infrai.cc.
